@@ -1,0 +1,59 @@
+name: Sync Npp Releases
+
+on:
+  schedule:
+    # 每天北京时间凌晨 1 点
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Get latest upstream release
+        id: upstream
+        run: |
+          API="https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/latest"
+          LATEST=$(curl -s -H "User-Agent: sync-script" "$API" | jq -r .tag_name)
+          echo "release=$LATEST" >> $GITHUB_OUTPUT
+
+      - name: Check if already exists in this repo
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.upstream.outputs.release }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Exit if exists
+        if: steps.check.outputs.exists == 'true'
+        run: echo "Already synced."
+
+      - name: Download assets from upstream
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir release
+          gh release download "${{ steps.upstream.outputs.release }}" \
+            -R notepad-plus-plus/notepad-plus-plus -D release
+
+      - name: Publish to our repo
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.upstream.outputs.release }}"
+          gh release create "$TAG" release/* \
+            --title "$TAG" \
+            --notes "Synced from notepad-plus-plus official release."
